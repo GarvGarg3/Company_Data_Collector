@@ -1,0 +1,6 @@
+# Scraping libraries
+requests>=2.31.0
+httpx>=0.24.1
+
+# Database adapter
+psycopg2-binary>=2.9.9

@@ -1,0 +1,4 @@
+.env
+api_responses.log
+__pycache__/
+scripts/bulk_source
