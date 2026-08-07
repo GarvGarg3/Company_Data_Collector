@@ -2,3 +2,7 @@
 api_responses.log
 __pycache__/
 scripts/bulk_source
+logs/
+*.csv
+scripts/scrapping/*.csv
+scripts/api_source/*.csv

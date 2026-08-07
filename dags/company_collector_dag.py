@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
+from airflow.utils.task_group import TaskGroup
 
 default_args = {
     'owner': 'airflow',
@@ -64,17 +65,18 @@ with DAG(
     default_args=default_args,
     description='A dynamic, scalable pipeline fetching company data from API & scraper sources and normalizing it',
     schedule_interval='@weekly',
-    start_date=datetime(2026, 8, 7),  
+    start_date=datetime(2026, 7, 1),
     catchup=False,
     tags=['company_collector'],
 ) as dag:
 
-    # 1. Build API fetch tasks (run first, limited to 2000 each)
-    api_tasks = build_api_tasks(dag, limit=2000)
+    # TaskGroup for API fetch tasks (run first, limited to 2000 each)
+    with TaskGroup("api_tasks_group") as api_group:
+        api_tasks = build_api_tasks(dag, limit=2000)
 
-    # 2. Build scraper tasks (run second)
-    scraper_tasks = build_scraper_tasks(dag)
+    # TaskGroup for scraper tasks (run second)
+    with TaskGroup("scraper_tasks_group") as scraper_group:
+        scraper_tasks = build_scraper_tasks(dag)
 
-    # Establish dependencies: all API tasks must finish before any scraper tasks start
-    api_tasks >> scraper_tasks
-
+    # Establish dependency with a single, clean visual grouping line
+    api_group >> scraper_group

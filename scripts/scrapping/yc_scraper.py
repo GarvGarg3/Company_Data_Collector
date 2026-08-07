@@ -40,12 +40,23 @@ import json
 import re
 import sys
 import time
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 from urllib.parse import urlencode
 
 import httpx
+
+# Configure logging format
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 try:
     from scripts import db_helper
@@ -147,6 +158,7 @@ class YCScraper:
             try:
                 resp = self.client.request(method, url, **kwargs)
                 if resp.status_code in (429, 500, 502, 503, 504):
+                    logger.warning("Rate limit hit, retrying after sleep...")
                     raise httpx.HTTPStatusError(
                         f"{resp.status_code} from {url}", request=resp.request, response=resp
                     )
@@ -277,8 +289,11 @@ class YCScraper:
                 count += 1
                 if len(db_buffer) >= BATCH_SIZE:
                     if verbose:
-                        print(f"  Scraped {count} companies. Upserting batch of {len(db_buffer)} to database...", file=sys.stderr)
-                    db_helper.upsert_companies(db_buffer)
+                        logger.info(f"  Scraped {count} companies. Upserting batch of {len(db_buffer)} to database...")
+                    try:
+                        db_helper.upsert_companies(db_buffer)
+                    except Exception:
+                        logger.exception("Failed to upsert scraper batch")
                     db_buffer.clear()
 
                 if limit is not None and count >= limit:
@@ -287,8 +302,11 @@ class YCScraper:
             # Upsert any remaining rows
             if db_buffer:
                 if verbose:
-                    print(f"  Scrape finished. Upserting final batch of {len(db_buffer)} to database...", file=sys.stderr)
-                db_helper.upsert_companies(db_buffer)
+                    logger.info(f"  Scrape finished. Upserting final batch of {len(db_buffer)} to database...")
+                try:
+                    db_helper.upsert_companies(db_buffer)
+                except Exception:
+                    logger.exception("Failed to upsert final scraper batch")
                 db_buffer.clear()
 
         return count
@@ -312,10 +330,10 @@ def main() -> int:
         with YCScraper(delay=args.delay) as scraper:
             count = scraper.scrape(args.output, batches=args.batch, limit=args.limit)
     except YCScraperError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        logger.exception("Scraper runtime error")
         return 1
 
-    print(f"done: {count} companies written to {args.output}")
+    logger.info(f"done: {count} companies written to {args.output}")
     return 0
 
 

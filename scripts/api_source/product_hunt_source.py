@@ -3,11 +3,23 @@ import sys
 import csv
 import time
 import requests
+import logging
 
 # Add the scripts directory to sys.path to allow importing db_helper later
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import db_helper
+
+# Configure logging format
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 
 def load_env(env_path=".env"):
     """Simple helper to load key-value pairs from .env file."""
@@ -73,10 +85,10 @@ def fetch_product_hunt_posts(api_key, target_count=200):
     has_next = True
     page = 1
 
-    print(f"Starting fetch from Product Hunt API for {target_count} posts...")
+    logger.info(f"Starting fetch from Product Hunt API for {target_count} posts...")
 
     while has_next and len(posts) < target_count:
-        print(f"Fetching page {page} with cursor: {cursor}...")
+        logger.info(f"Fetching page {page} with cursor: {cursor}...")
         variables = {"cursor": cursor}
         
         try:
@@ -86,11 +98,14 @@ def fetch_product_hunt_posts(api_key, target_count=200):
                 headers=headers,
                 timeout=15
             )
+            if response.status_code == 429:
+                logger.warning("Rate limit (429) hit. Stopping fetch gracefully.")
+                break
             response.raise_for_status()
             res_data = response.json()
             
             if "errors" in res_data:
-                print(f"GraphQL Errors: {res_data['errors']}")
+                logger.error(f"GraphQL Errors: {res_data['errors']}")
                 break
                 
             data = res_data.get("data", {})
@@ -122,14 +137,15 @@ def fetch_product_hunt_posts(api_key, target_count=200):
             page += 1
             
             # Avoid hitting rate limits
-            time.sleep(0.5)
+            time.sleep(2.0)
             
-        except Exception as e:
-            print(f"Error fetching data: {e}")
+        except Exception:
+            logger.exception("Error fetching data")
             break
 
-    print(f"Fetched {len(posts)} posts total.")
+    logger.info(f"Fetched {len(posts)} posts total.")
     return posts[:target_count]
+
 
 def main():
     import argparse
@@ -141,18 +157,22 @@ def main():
     env_vars = load_env()
     api_key = env_vars.get("PRODUCT_HUNT_KEY") or os.getenv("PRODUCT_HUNT_KEY")
     if not api_key:
-        print("Error: PRODUCT_HUNT_KEY not found in env variables or .env file.")
+        logger.error("PRODUCT_HUNT_KEY not found in env variables or .env file.")
         sys.exit(1)
         
     posts = fetch_product_hunt_posts(api_key, args.limit)
     
     if not posts:
-        print("No posts fetched. Exiting.")
-        sys.exit(1)
+        logger.warning("No posts fetched (possibly due to API rate limit or error). Gracefully exiting.")
+        sys.exit(0)
         
-    print("Upserting posts to Postgres database...")
-    db_helper.upsert_companies(posts)
-    print("Successfully completed data loading.")
+    logger.info("Upserting posts to Postgres database...")
+    try:
+        db_helper.upsert_companies(posts)
+        logger.info("Successfully completed data loading.")
+    except Exception:
+        logger.exception("Failed to complete data loading.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -1,9 +1,20 @@
 import os
 import re
+import logging
 from datetime import datetime
 
 import psycopg2
 from psycopg2.extras import execute_values
+
+# Configure logging format
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 
 def get_connection():
@@ -52,6 +63,66 @@ def upsert_companies(companies):
     if not cleaned_companies:
         return
 
+    # Deduplicate in-memory by Company_name (case-insensitive) to avoid Postgres cardinality violation
+    deduped = {}
+    for c in cleaned_companies:
+        name = c["Company_name"]
+        key = name.lower()
+        
+        # Determine sources list for the current item
+        source_val = c.get("Source")
+        sources_val = c.get("Sources")
+        if sources_val and isinstance(sources_val, list):
+            src_list = [str(s).strip() for s in sources_val if s]
+        elif source_val:
+            src_list = [str(source_val).strip()]
+        else:
+            src_list = []
+
+        if key not in deduped:
+            deduped[key] = {
+                "Company_name": name,
+                "Website": c.get("Website"),
+                "Sector": c.get("Sector"),
+                "Country": c.get("Country"),
+                "Sources": src_list,
+                "Active": c.get("Active", True),
+                "No_of_employees": c.get("No_of_employees"),
+                "Updated_at": c.get("Updated_at", datetime.now())
+            }
+        else:
+            existing = deduped[key]
+            # Merge fields
+            if not existing["Website"] and c.get("Website"):
+                existing["Website"] = c.get("Website")
+            if c.get("Sector"):
+                if existing["Sector"]:
+                    # Merge and deduplicate comma-separated sectors
+                    exist_secs = set(s.strip() for s in existing["Sector"].split(",") if s.strip())
+                    new_secs = set(s.strip() for s in c["Sector"].split(",") if s.strip())
+                    existing["Sector"] = ", ".join(sorted(exist_secs.union(new_secs)))
+                else:
+                    existing["Sector"] = c.get("Sector")
+            if not existing["Country"] and c.get("Country"):
+                existing["Country"] = c.get("Country")
+            
+            # Combine sources list
+            existing["Sources"] = list(set(existing["Sources"] + src_list))
+            
+            # Merge active status (True if any is active)
+            existing["Active"] = existing["Active"] or c.get("Active", True)
+            
+            # Merge employees (take max)
+            if c.get("No_of_employees") is not None:
+                if existing["No_of_employees"] is not None:
+                    existing["No_of_employees"] = max(existing["No_of_employees"], c["No_of_employees"])
+                else:
+                    existing["No_of_employees"] = c["No_of_employees"]
+            
+            # Merge updated_at (take max)
+            if c.get("Updated_at"):
+                existing["Updated_at"] = max(existing["Updated_at"], c["Updated_at"])
+
     query = """
     INSERT INTO Company_database (
         Company_name,
@@ -81,32 +152,25 @@ def upsert_companies(companies):
         Updated_at = CURRENT_TIMESTAMP;
     """
 
-    rows = []
-    for c in cleaned_companies:
-        source_val = c.get("Source")
-        sources_val = c.get("Sources")
-        
-        # Determine initial sources list
-        if sources_val and isinstance(sources_val, list):
-            src_list = [str(s).strip() for s in sources_val if s]
-        elif source_val:
-            src_list = [str(source_val).strip()]
-        else:
-            src_list = []
-            
-        rows.append((
+    rows = [
+        (
             c["Company_name"],
-            c.get("Website"),
-            c.get("Sector"),
-            c.get("Country"),
-            src_list,
-            c.get("Active", True),
-            c.get("No_of_employees"),
-            c.get("Updated_at", datetime.now()),
-        ))
+            c["Website"],
+            c["Sector"],
+            c["Country"],
+            c["Sources"],
+            bool(c["Active"]),
+            c["No_of_employees"],
+            c["Updated_at"]
+        )
+        for c in deduped.values()
+    ]
 
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            execute_values(cur, query, rows)
-
-    print(f"Upserted {len(rows)} normalized companies.")
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                execute_values(cur, query, rows)
+        logger.info(f"Upserted {len(rows)} normalized companies.")
+    except Exception as e:
+        logger.exception("Failed to upsert companies to database")
+        raise e

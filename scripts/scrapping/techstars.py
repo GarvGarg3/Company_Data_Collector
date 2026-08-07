@@ -10,6 +10,7 @@ import csv
 import os
 import time
 import requests
+import logging
 from datetime import datetime, timezone
 
 try:
@@ -19,6 +20,16 @@ except ImportError:
         from scrapping import db_helper
     except ImportError:
         import db_helper
+
+# Configure logging format
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 TYPESENSE_HOST = "https://8gbms7c94riane0lp-1.a1.typesense.net"
 API_KEY = "yPf0UzHocD8TcYlb7KqJFJuRO1OoCRn2"
@@ -106,24 +117,24 @@ def save_to_csv(filepath, deduped_companies):
                 "Active": c["Active"],
                 "No_of_employees": c["No_of_employees"],
             })
-    print(f"Done. Wrote/Appended {len(deduped_companies)} companies to {filepath}")
+    logger.info(f"Done. Wrote/Appended {len(deduped_companies)} companies to {filepath}")
 
 
 def main():
-    print("Fetching page 1 to find total company count...")
+    logger.info("Fetching page 1 to find total company count...")
     try:
         first = search(page=1, per_page=PER_PAGE)
         result = first["results"][0]
         total_found = result["found"]
-    except Exception as e:
-        print(f"Error fetching data from Typesense API: {e}")
+    except Exception:
+        logger.exception("Error fetching data from Typesense API")
         return
 
-    print(f"Total companies in index: {total_found}")
+    logger.info(f"Total companies in index: {total_found}")
 
     all_hits = list(result["hits"])
     total_pages = (total_found + PER_PAGE - 1) // PER_PAGE
-    print(f"Fetching remaining pages (per_page={PER_PAGE}, {total_pages} pages total)...")
+    logger.info(f"Fetching remaining pages (per_page={PER_PAGE}, {total_pages} pages total)...")
 
     for page in range(2, total_pages + 1):
         time.sleep(REQUEST_DELAY)
@@ -131,9 +142,9 @@ def main():
             data = search(page=page, per_page=PER_PAGE)
             hits = data["results"][0]["hits"]
             all_hits.extend(hits)
-            print(f"  page {page}/{total_pages} -> {len(hits)} hits (running total: {len(all_hits)})")
-        except Exception as e:
-            print(f"Error fetching page {page}: {e}")
+            logger.info(f"  page {page}/{total_pages} -> {len(hits)} hits (running total: {len(all_hits)})")
+        except Exception:
+            logger.exception(f"Error fetching page {page}")
             break
 
     # Format the data to match the database schema
@@ -191,8 +202,12 @@ def main():
     save_to_csv(ROOT_CSV, deduped_companies)
     
     # Directly insert/upsert into PostgreSQL database
-    print("Upserting records directly to PostgreSQL database...")
-    db_helper.upsert_companies(deduped_companies)
+    logger.info("Upserting records directly to PostgreSQL database...")
+    try:
+        db_helper.upsert_companies(deduped_companies)
+        logger.info("Successfully completed data loading.")
+    except Exception:
+        logger.exception("Failed to load data into database")
 
 if __name__ == "__main__":
     main()

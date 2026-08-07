@@ -14,12 +14,23 @@ OUTPUT:
 import csv
 import os
 import requests
+import logging
 from datetime import datetime, timezone
 
 try:
     from scripts import db_helper
 except ImportError:
     import db_helper
+
+# Configure logging format
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 API_URL = "https://500.co/api/startups"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -34,17 +45,17 @@ def scrape():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    print(f"Fetching data from {API_URL}...")
+    logger.info(f"Fetching data from {API_URL}...")
     try:
         response = requests.get(API_URL, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
-    except Exception as e:
-        print(f"Error fetching data from API: {e}")
+    except Exception:
+        logger.exception("Error fetching data from API")
         return []
 
     startups = data.get("res", [])
-    print(f"Found {len(startups)} startups in API response.")
+    logger.info(f"Found {len(startups)} startups in API response.")
 
     for item in startups:
         org = item.get("organization") or {}
@@ -114,16 +125,20 @@ def write_csv(companies):
                 "Active": c["Active"],
                 "No_of_employees": c["No_of_employees"],
             })
-    print(f"Wrote {len(companies)} rows to {OUTPUT_CSV}")
+    logger.info(f"Wrote {len(companies)} rows to {OUTPUT_CSV}")
 
 
 if __name__ == "__main__":
     data = scrape()
     if not data:
-        print("No companies could be retrieved.")
+        logger.warning("No companies could be retrieved.")
     else:
         # Write to local CSV backup
         write_csv(data)
         # Directly insert/upsert into PostgreSQL database
-        print("Upserting records directly to PostgreSQL database...")
-        db_helper.upsert_companies(data)
+        logger.info("Upserting records directly to PostgreSQL database...")
+        try:
+            db_helper.upsert_companies(data)
+            logger.info("Successfully completed data loading.")
+        except Exception:
+            logger.exception("Failed to complete data loading.")

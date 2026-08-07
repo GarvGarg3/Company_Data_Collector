@@ -2,11 +2,23 @@ import os
 import sys
 import time
 import requests
+import logging
 
 # Add the scripts directory to sys.path to allow importing db_helper later
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import db_helper
+
+# Configure logging format
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 
 def load_env(env_path=".env"):
     """Simple helper to load key-value pairs from .env file."""
@@ -49,7 +61,7 @@ def fetch_companies_api_data(api_key, target_count=200):
         "grill", "eatery", "pizzeria", "bakery", "agriculture", "construction"
     ]
     
-    print(f"Starting fetch from CompaniesAPI for {target_count} companies...")
+    logger.info(f"Starting fetch from CompaniesAPI for {target_count} companies...")
     
     while len(companies) < target_count:
         params = {
@@ -61,12 +73,15 @@ def fetch_companies_api_data(api_key, target_count=200):
         
         try:
             response = requests.get(url, params=params, timeout=15)
+            if response.status_code == 429:
+                logger.warning("Rate limit (429) hit. Stopping fetch gracefully.")
+                break
             response.raise_for_status()
             data = response.json()
             items = data.get("companies", [])
             
             if not items:
-                print("No more companies returned by API.")
+                logger.info("No more companies returned by API.")
                 break
                 
             for item in items:
@@ -100,17 +115,18 @@ def fetch_companies_api_data(api_key, target_count=200):
                     if len(companies) >= target_count:
                         break
             
-            print(f"Page {page}: Accumulated {len(companies)} matching companies...")
+            logger.info(f"Page {page}: Accumulated {len(companies)} matching companies...")
             page += 1
             # Rate limit politeness
-            time.sleep(0.5)
+            time.sleep(1.0)
             
-        except Exception as e:
-            print(f"Error fetching page {page}: {e}")
+        except Exception:
+            logger.exception(f"Error fetching page {page}")
             break
             
-    print(f"Fetched {len(companies)} companies total.")
+    logger.info(f"Fetched {len(companies)} companies total.")
     return companies[:target_count]
+
 
 def main():
     import argparse
@@ -121,18 +137,22 @@ def main():
     env_vars = load_env()
     api_key = env_vars.get("COMPANIESAPI_KEY") or os.getenv("COMPANIESAPI_KEY")
     if not api_key:
-        print("Error: COMPANIESAPI_KEY not found in env variables or .env file.")
+        logger.error("COMPANIESAPI_KEY not found in env variables or .env file.")
         sys.exit(1)
         
     companies = fetch_companies_api_data(api_key, args.limit)
     
     if not companies:
-        print("No companies fetched. Exiting.")
-        sys.exit(1)
+        logger.warning("No companies fetched (possibly due to API rate limit or error). Gracefully exiting.")
+        sys.exit(0)
         
-    print("Upserting companies to Postgres database...")
-    db_helper.upsert_companies(companies)
-    print("Successfully completed data loading.")
+    logger.info("Upserting companies to Postgres database...")
+    try:
+        db_helper.upsert_companies(companies)
+        logger.info("Successfully completed data loading.")
+    except Exception:
+        logger.exception("Failed to complete data loading.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
