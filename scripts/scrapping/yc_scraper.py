@@ -48,9 +48,12 @@ from urllib.parse import urlencode
 import httpx
 
 try:
-    from scrapping import db_helper
+    from scripts import db_helper
 except ImportError:
-    import db_helper
+    try:
+        from scrapping import db_helper
+    except ImportError:
+        import db_helper
 
 BASE_URL = "https://www.ycombinator.com"
 DIRECTORY_URL = f"{BASE_URL}/companies"

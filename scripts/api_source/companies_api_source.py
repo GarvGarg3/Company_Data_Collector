@@ -113,13 +113,18 @@ def fetch_companies_api_data(api_key, target_count=200):
     return companies[:target_count]
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Fetch companies from CompaniesAPI.")
+    parser.add_argument("--limit", type=int, default=2000, help="Limit number of companies to fetch (default: 2000)")
+    args = parser.parse_args()
+
     env_vars = load_env()
-    api_key = env_vars.get("COMPANIESAPI_KEY")
+    api_key = env_vars.get("COMPANIESAPI_KEY") or os.getenv("COMPANIESAPI_KEY")
     if not api_key:
         print("Error: COMPANIESAPI_KEY not found in env variables or .env file.")
         sys.exit(1)
         
-    companies = fetch_companies_api_data(api_key, 200)
+    companies = fetch_companies_api_data(api_key, args.limit)
     
     if not companies:
         print("No companies fetched. Exiting.")
@@ -131,3 +136,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

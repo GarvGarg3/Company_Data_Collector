@@ -132,14 +132,19 @@ def fetch_product_hunt_posts(api_key, target_count=200):
     return posts[:target_count]
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Fetch posts from Product Hunt.")
+    parser.add_argument("--limit", type=int, default=2000, help="Limit number of posts to fetch (default: 2000)")
+    args = parser.parse_args()
+
     # Load env variables to get API key
     env_vars = load_env()
-    api_key = env_vars.get("PRODUCT_HUNT_KEY")
+    api_key = env_vars.get("PRODUCT_HUNT_KEY") or os.getenv("PRODUCT_HUNT_KEY")
     if not api_key:
         print("Error: PRODUCT_HUNT_KEY not found in env variables or .env file.")
         sys.exit(1)
         
-    posts = fetch_product_hunt_posts(api_key, 200)
+    posts = fetch_product_hunt_posts(api_key, args.limit)
     
     if not posts:
         print("No posts fetched. Exiting.")
@@ -151,3 +156,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

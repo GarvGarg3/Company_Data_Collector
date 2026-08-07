@@ -13,9 +13,12 @@ import requests
 from datetime import datetime, timezone
 
 try:
-    from scrapping import db_helper
+    from scripts import db_helper
 except ImportError:
-    import db_helper
+    try:
+        from scrapping import db_helper
+    except ImportError:
+        import db_helper
 
 TYPESENSE_HOST = "https://8gbms7c94riane0lp-1.a1.typesense.net"
 API_KEY = "yPf0UzHocD8TcYlb7KqJFJuRO1OoCRn2"

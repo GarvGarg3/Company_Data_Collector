@@ -9,9 +9,10 @@ RUN apt-get update -qq && \
     rm -rf /var/lib/apt/lists/*
 
 USER airflow
-COPY requirements/airflow.txt /requirements.txt
+COPY requirements.txt /requirements.txt
 
-# Need constraints to ensure compatibility
-RUN pip install --no-cache-dir \
+# Dynamically construct constraint URL based on python version inside the container
+RUN PYTHON_VERSION="$(python --version | cut -d ' ' -f 2 | cut -d '.' -f 1-2)" && \
+    pip install --no-cache-dir \
     -r /requirements.txt \
-    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.8.1/constraints-3.8.txt"
+    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.8.1/constraints-${PYTHON_VERSION}.txt"
