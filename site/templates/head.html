@@ -1,0 +1,109 @@
+<style>
+  :root {
+    color-scheme: light;
+    --surface:#fcfcfb; --raised:#ffffff; --sunk:#f2f3f1;
+    --rule:#dfe1dd; --ink:#14171a; --ink-2:#4d534f; --ink-3:#767c77;
+    --accent:#2a78d6; --accent-soft:#e3edfa; --focus:#2a78d6;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface:#1a1a19; --raised:#232322; --sunk:#131313;
+    --rule:#34352f; --ink:#f4f4f0; --ink-2:#c3c2b7; --ink-3:#8e8f85;
+    --accent:#3987e5; --accent-soft:#1b2a3d; --focus:#5b9ff0;
+  } }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface:#1a1a19; --raised:#232322; --sunk:#131313;
+    --rule:#34352f; --ink:#f4f4f0; --ink-2:#c3c2b7; --ink-3:#8e8f85;
+    --accent:#3987e5; --accent-soft:#1b2a3d; --focus:#5b9ff0;
+  }
+  body { background:var(--surface); color:var(--ink); font-family:var(--sans); line-height:1.5; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:72rem; margin:0 auto; padding:2.5rem 1.25rem 4rem; display:flex; flex-direction:column; gap:1.5rem; }
+  h1 { margin:0; font-size:1.6rem; font-weight:650; letter-spacing:-0.02em; text-wrap:balance; }
+  .lede { margin:0; color:var(--ink-2); max-width:62ch; font-size:0.92rem; }
+  .eyebrow { font-family:var(--mono); font-size:0.7rem; letter-spacing:0.11em; text-transform:uppercase; color:var(--ink-3); }
+  header { display:flex; flex-direction:column; gap:0.5rem; }
+
+  .controls { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center;
+    padding:0.85rem; background:var(--raised); border:1px solid var(--rule); border-radius:3px; position:sticky; top:0; z-index:5; }
+  input[type="search"], select {
+    font:inherit; font-size:0.88rem; color:var(--ink); background:var(--sunk);
+    border:1px solid var(--rule); border-radius:3px; padding:0.42rem 0.6rem;
+  }
+  input[type="search"] { flex:1 1 15rem; min-width:11rem; }
+  select { max-width:13rem; }
+  input:focus-visible, select:focus-visible, button:focus-visible { outline:2px solid var(--focus); outline-offset:1px; }
+  button.reset { font:inherit; font-size:0.84rem; color:var(--ink-2); background:none;
+    border:1px solid var(--rule); border-radius:3px; padding:0.42rem 0.7rem; cursor:pointer; }
+  button.reset:hover { background:var(--sunk); color:var(--ink); }
+  .count { font-family:var(--mono); font-size:0.8rem; color:var(--ink-3); font-variant-numeric:tabular-nums; margin-left:auto; }
+  .count b { color:var(--ink); font-weight:550; }
+
+  .scroll { overflow-x:auto; border:1px solid var(--rule); border-radius:3px; background:var(--raised); }
+  table { border-collapse:collapse; width:100%; font-size:0.87rem; }
+  th, td { text-align:left; padding:0.55rem 0.8rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-family:var(--mono); font-size:0.68rem; text-transform:uppercase; letter-spacing:0.07em;
+       color:var(--ink-3); font-weight:500; background:var(--raised); position:sticky; top:0; cursor:pointer; user-select:none; white-space:nowrap; }
+  th:hover { color:var(--ink); }
+  th .dir { color:var(--accent); }
+  tbody tr:hover { background:var(--sunk); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.name { font-weight:550; min-width:12rem; }
+  td.sector { color:var(--ink-2); font-size:0.82rem; max-width:22rem; }
+  td.country { white-space:nowrap; color:var(--ink-2); }
+  td.num { font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:right; color:var(--ink-2); }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .tag { display:inline-block; font-family:var(--mono); font-size:0.66rem; letter-spacing:0.03em;
+    padding:0.1rem 0.38rem; border-radius:2px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; margin:0 0.2rem 0.2rem 0; }
+  .empty { padding:3rem 1rem; text-align:center; color:var(--ink-3); font-size:0.9rem; }
+  .pager { display:flex; gap:0.5rem; align-items:center; justify-content:center; padding-top:0.3rem; }
+  .pager button { font:inherit; font-size:0.84rem; padding:0.35rem 0.75rem; border:1px solid var(--rule);
+    background:var(--raised); color:var(--ink); border-radius:3px; cursor:pointer; }
+  .pager button:disabled { color:var(--ink-3); cursor:default; }
+  .pager button:not(:disabled):hover { background:var(--sunk); }
+  .pager .pos { font-family:var(--mono); font-size:0.78rem; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+  footer { font-family:var(--mono); font-size:0.72rem; color:var(--ink-3); }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">{{BRAND}}</div>
+    <h1>{{HEADLINE}}</h1>
+    <p class="lede">{{LEDE}}</p>
+  </header>
+
+  <div class="controls">
+    <input type="search" id="q" placeholder="Search company, sector or country&hellip;" aria-label="Search companies">
+    <select id="source" aria-label="Filter by source"><option value="">All sources</option></select>
+    <select id="sector" aria-label="Filter by sector"><option value="">All sectors</option></select>
+    <select id="country" aria-label="Filter by country"><option value="">All countries</option></select>
+    <button class="reset" id="reset" type="button">Reset</button>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr>
+        <th data-key="n">Company</th>
+        <th data-key="s">Sector</th>
+        <th data-key="c">Country</th>
+        <th data-key="e">Team</th>
+        <th data-key="src">Source</th>
+      </tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden>No companies match those filters.</div>
+  </div>
+
+  <div class="pager">
+    <button id="prev" type="button">&larr; Previous</button>
+    <span class="pos" id="pos"></span>
+    <button id="next" type="button">Next &rarr;</button>
+  </div>
+
+  <footer>{{FOOTER}}</footer>
+</div>
+

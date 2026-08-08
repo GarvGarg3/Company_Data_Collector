@@ -22,9 +22,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 try:
-    from scripts import db_helper
+    from scripts import db_helper, company_filter
 except ImportError:
     import db_helper
+    import company_filter
 
 # Configure logging format
 logging.basicConfig(
@@ -49,16 +50,23 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-def fetch_page(page_num):
-    """Fetch a single page of startup profiles from the API."""
+def fetch_page(page_num, filters=None):
+    """Fetch a single page of startup profiles from the API.
+
+    Only `query` and `stages` are honoured server-side: the portal's
+    industries/sectors/states/cities facets expect internal ids rather than the
+    labels it returns, and sending labels silently yields zero results. Those
+    are applied client-side by `matches_filters` instead.
+    """
+    filters = filters or {}
     payload = {
-        "query": "",
+        "query": filters.get("query", ""),
         "focusSector": False,
         "industries": [],
         "sectors": [],
         "states": [],
         "cities": [],
-        "stages": [],
+        "stages": filters.get("stages", []),
         "badges": [],
         "internationalUser": False,
         "page": page_num,
@@ -76,6 +84,29 @@ def fetch_page(page_num):
     response = requests.post(API_URL, json=payload, headers=HEADERS, timeout=15)
     response.raise_for_status()
     return response.json()
+
+def matches_filters(item, filters):
+    """Apply the facets the API refuses to filter on, against the returned record."""
+    def field_values(key):
+        value = item.get(key)
+        if isinstance(value, list):
+            return [str(v).lower() for v in value if v]
+        return [str(value).lower()] if value else []
+
+    for filter_key, item_key in (
+        ("states", "state"),
+        ("cities", "city"),
+        ("industries", "industries"),
+        ("sectors", "sectors"),
+    ):
+        wanted = [w.lower() for w in filters.get(filter_key, [])]
+        if not wanted:
+            continue
+        present = field_values(item_key)
+        if not any(w in p for w in wanted for p in present):
+            return False
+    return True
+
 
 def save_to_csv(filepath, startups):
     """Save the list of startups to the target CSV in append mode."""
@@ -147,10 +178,29 @@ def check_existing_companies(names):
 def main():
     parser = argparse.ArgumentParser(description="Scrape the Startup India directory using API.")
     parser.add_argument("--limit", type=int, default=1000, help="Target number of new startups to scrape (default: 1000)")
+    parser.add_argument("--industry", action="append", default=[], help="Filter by industry, e.g. 'IT Services' (repeatable)")
+    parser.add_argument("--sector", action="append", default=[], help="Filter by sector, e.g. 'AI' (repeatable)")
+    parser.add_argument("--state", action="append", default=[], help="Filter by state, e.g. 'KARNATAKA' (repeatable)")
+    parser.add_argument("--city", action="append", default=[], help="Filter by city (repeatable)")
+    parser.add_argument("--stage", action="append", default=[],
+                        help="Filter by stage: Ideation, Validation, EarlyTraction, Scaling (repeatable, applied API-side)")
+    parser.add_argument("--query", default="", help="Free-text search passed to the API")
     args = parser.parse_args()
 
+    filters = {
+        "query": args.query,
+        "industries": args.industry,
+        "sectors": args.sector,
+        "states": args.state,
+        "cities": args.city,
+        "stages": args.stage,
+    }
+    active_filters = {k: v for k, v in filters.items() if v}
+
     logger.info(f"Initializing Startup India API Scraper (Searching for at least {args.limit} new companies)...")
-    
+    if active_filters:
+        logger.info(f"Applying filters: {active_filters}")
+
     startups_buffer = []
     new_companies_found = 0
     page = 0
@@ -160,12 +210,14 @@ def main():
     while new_companies_found < args.limit and page < max_pages:
         logger.info(f"Fetching batch of pages {page} to {page + batch_size_pages - 1}...")
         batch_startups = []
-        
+        batch_raw_count = 0
+
         # 1. Fetch page batch
         for p in range(page, page + batch_size_pages):
             try:
-                data = fetch_page(p)
+                data = fetch_page(p, filters)
                 content = data.get("content", [])
+                batch_raw_count += len(content)
                 if not content:
                     logger.info(f"No more startups returned by API at page {p}.")
                     break
@@ -175,6 +227,8 @@ def main():
                     name = item.get("name")
                     if not name:
                         continue
+                    if not matches_filters(item, filters):
+                        continue
                     batch_startups.append((name, item))
                 
                 time.sleep(0.1)  # Rate limit politeness
@@ -182,9 +236,16 @@ def main():
                 logger.exception(f"Error fetching page {p}")
                 break
                 
-        if not batch_startups:
+        if batch_raw_count == 0:
             logger.info("No startups retrieved in this batch. Exiting loop.")
             break
+
+        if not batch_startups:
+            # Everything in the batch was filtered out client-side; the
+            # directory still has pages left, so keep paging.
+            logger.info(f"No startups matched the filters in pages {page}-{page + batch_size_pages - 1}. Continuing.")
+            page += batch_size_pages
+            continue
             
         # 2. Query Postgres selectively for this batch of names
         batch_names = [item[0] for item in batch_startups]
@@ -210,7 +271,7 @@ def main():
             all_sectors = list(set(sectors + industries))
             sector_desc = ", ".join(all_sectors) if all_sectors else "Tech / Services"
             
-            startups_buffer.append({
+            record = {
                 "Company_name": name.strip(),
                 "Website": profile_url,
                 "Sector": sector_desc,
@@ -218,8 +279,18 @@ def main():
                 "Source": SOURCE_LABEL,
                 "Active": True,
                 "No_of_employees": None
-            })
-            
+            }
+
+            # Skip shell/non-venture records here too, so --limit counts usable
+            # leads and the CSV matches what reaches the database.
+            keep, reason = company_filter.evaluate(record)
+            if not keep:
+                logger.debug(f"Skipping '{name}': {reason}")
+                existing_in_db.add(name_clean.lower())
+                continue
+
+            startups_buffer.append(record)
+
             page_new_count += 1
             new_companies_found += 1
             

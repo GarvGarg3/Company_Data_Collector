@@ -6,6 +6,11 @@ from datetime import datetime
 import psycopg2
 from psycopg2.extras import execute_values
 
+try:
+    from scripts import company_filter
+except ImportError:
+    import company_filter
+
 # Configure logging format
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +48,69 @@ def clean_display_name(name):
     return cleaned if cleaned else name_str
 
 
+# Sources disagree on both spelling and casing, which splits one country across
+# several rows. Aliases are keyed on the lowercased, punctuation-free form.
+COUNTRY_ALIASES = {
+    "usa": "United States",
+    "us": "United States",
+    "u s a": "United States",
+    "u s": "United States",
+    "united states of america": "United States",
+    "america": "United States",
+    "uk": "United Kingdom",
+    "u k": "United Kingdom",
+    "great britain": "United Kingdom",
+    "england": "United Kingdom",
+    "britain": "United Kingdom",
+    "uae": "United Arab Emirates",
+    "czech republic": "Czechia",
+    "republic of korea": "South Korea",
+    "korea": "South Korea",
+    "russian federation": "Russia",
+    "viet nam": "Vietnam",
+    "holland": "Netherlands",
+}
+
+# Words that stay lowercase inside a country name unless they lead it.
+_COUNTRY_MINOR_WORDS = {"and", "of", "the", "da", "de"}
+
+
+def clean_country(country):
+    """Normalize a country to one canonical spelling so filters don't split.
+
+    'USA', 'UNITED STATES' and 'United States' all collapse to 'United States'.
+    """
+    if not country:
+        return None
+
+    text = re.sub(r'\s+', ' ', str(country).strip())
+    if not text:
+        return None
+
+    key = re.sub(r'[^a-z ]', ' ', text.lower())
+    key = re.sub(r'\s+', ' ', key).strip()
+    if key in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[key]
+
+    # Title-case each word, but keep connectors lowercase and preserve
+    # hyphenated parts ('Guinea-Bissau', 'Trinidad and Tobago', "Côte d'Ivoire").
+    def cap_part(part):
+        segments = part.split("'")
+        if len(segments) == 2 and len(segments[0]) == 1:
+            # Elided article: d'Ivoire, not D'ivoire.
+            return f"{segments[0].lower()}'{segments[1].capitalize()}"
+        return "'".join(segment.capitalize() for segment in segments)
+
+    words = []
+    for index, word in enumerate(text.split(" ")):
+        lowered = word.lower()
+        if index > 0 and lowered in _COUNTRY_MINOR_WORDS:
+            words.append(lowered)
+        else:
+            words.append("-".join(cap_part(part) for part in lowered.split("-")))
+    return " ".join(words)
+
+
 def upsert_companies(companies):
     if not companies:
         return
@@ -58,9 +126,17 @@ def upsert_companies(companies):
             continue
         c_copy = c.copy()
         c_copy["Company_name"] = cleaned_name
+        c_copy["Country"] = clean_country(c.get("Country"))
         cleaned_companies.append(c_copy)
 
     if not cleaned_companies:
+        return
+
+    # Drop shell entities and businesses outside venture scope before merging
+    cleaned_companies = company_filter.filter_companies(cleaned_companies)
+
+    if not cleaned_companies:
+        logger.info("All records were removed by the relevance filter. Nothing to upsert.")
         return
 
     # Deduplicate in-memory by Company_name (case-insensitive) to avoid Postgres cardinality violation

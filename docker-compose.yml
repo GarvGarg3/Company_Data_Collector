@@ -93,6 +93,28 @@ services:
       - ./scripts:/opt/airflow/scripts
     command: scheduler
 
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: task_web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      PG_DB: ${PG_DB}
+      SITE_BRAND: ${SITE_BRAND:-Company Data Collector}
+      SITE_HEADLINE: ${SITE_HEADLINE:-Sourced company directory}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./web:/app/web
+
 volumes:
   pgdata:
 

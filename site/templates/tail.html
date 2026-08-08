@@ -1,0 +1,111 @@
+</script>
+<script>
+(function () {
+  const DATA = JSON.parse(document.getElementById("data").textContent);
+  const rows = DATA.rows;
+  const PAGE = 50;
+
+  const $ = id => document.getElementById(id);
+  const q = $("q"), fSource = $("source"), fSector = $("sector"), fCountry = $("country");
+  const body = $("body"), empty = $("empty"), count = $("count"), pos = $("pos");
+
+  const fill = (sel, values) => {
+    for (const v of values) {
+      const o = document.createElement("option");
+      o.value = v; o.textContent = v;
+      sel.appendChild(o);
+    }
+  };
+  fill(fSource, DATA.sources);
+  fill(fSector, DATA.sectors);
+  fill(fCountry, DATA.countries);
+
+  let sortKey = "n", sortAsc = true, page = 0, view = rows;
+
+  const norm = s => (s || "").toLowerCase();
+
+  function applyFilters() {
+    const term = norm(q.value).trim();
+    const src = fSource.value, sec = fSector.value, cty = fCountry.value;
+    view = rows.filter(r => {
+      if (src && !(r.src || []).includes(src)) return false;
+      if (cty && r.c !== cty) return false;
+      if (sec && !norm(r.s).includes(norm(sec))) return false;
+      if (term && !(norm(r.n).includes(term) || norm(r.s).includes(term) || norm(r.c).includes(term))) return false;
+      return true;
+    });
+    sortView();
+    page = 0;
+    render();
+  }
+
+  function sortView() {
+    const k = sortKey, dir = sortAsc ? 1 : -1;
+    view = view.slice().sort((a, b) => {
+      let x = a[k], y = b[k];
+      if (k === "src") { x = (x || [])[0] || ""; y = (y || [])[0] || ""; }
+      if (k === "e") { x = x == null ? -1 : x; y = y == null ? -1 : y; return (x - y) * dir; }
+      return String(x || "").localeCompare(String(y || ""), undefined, { sensitivity: "base" }) * dir;
+    });
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  function render() {
+    const total = view.length;
+    const pages = Math.max(1, Math.ceil(total / PAGE));
+    if (page >= pages) page = pages - 1;
+    const slice = view.slice(page * PAGE, page * PAGE + PAGE);
+
+    count.innerHTML = "<b>" + total.toLocaleString() + "</b> of " + rows.length.toLocaleString() + " companies";
+    empty.hidden = total > 0;
+
+    body.innerHTML = slice.map(r => {
+      const name = r.w
+        ? '<a href="' + esc(r.w) + '" target="_blank" rel="noopener noreferrer">' + esc(r.n) + "</a>"
+        : esc(r.n);
+      const tags = (r.src || []).map(s => '<span class="tag">' + esc(s) + "</span>").join("");
+      return "<tr>" +
+        '<td class="name">' + name + "</td>" +
+        '<td class="sector">' + esc(r.s || "\u2014") + "</td>" +
+        '<td class="country">' + esc(r.c || "\u2014") + "</td>" +
+        '<td class="num">' + (r.e == null ? "\u2014" : r.e) + "</td>" +
+        "<td>" + (tags || "\u2014") + "</td>" +
+        "</tr>";
+    }).join("");
+
+    const from = total ? page * PAGE + 1 : 0;
+    const to = Math.min(total, (page + 1) * PAGE);
+    pos.textContent = from + "\u2013" + to + " of " + total.toLocaleString();
+    $("prev").disabled = page === 0;
+    $("next").disabled = page >= pages - 1;
+
+    document.querySelectorAll("th[data-key]").forEach(th => {
+      const base = th.textContent.replace(/[\u2191\u2193]\s*$/, "").trim();
+      th.innerHTML = esc(base) + (th.dataset.key === sortKey ? ' <span class="dir">' + (sortAsc ? "\u2191" : "\u2193") + "</span>" : "");
+    });
+  }
+
+  document.querySelectorAll("th[data-key]").forEach(th => {
+    th.addEventListener("click", () => {
+      const k = th.dataset.key;
+      if (k === sortKey) { sortAsc = !sortAsc; } else { sortKey = k; sortAsc = true; }
+      sortView(); render();
+    });
+  });
+
+  let timer;
+  q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(applyFilters, 120); });
+  [fSource, fSector, fCountry].forEach(s => s.addEventListener("change", applyFilters));
+  $("reset").addEventListener("click", () => {
+    q.value = ""; fSource.value = ""; fSector.value = ""; fCountry.value = "";
+    applyFilters();
+  });
+  $("prev").addEventListener("click", () => { if (page > 0) { page--; render(); window.scrollTo({ top: 0, behavior: "smooth" }); } });
+  $("next").addEventListener("click", () => { page++; render(); window.scrollTo({ top: 0, behavior: "smooth" }); });
+
+  applyFilters();
+})();
+</script>
