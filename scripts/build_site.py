@@ -64,7 +64,7 @@ FAVICON = (
 
 def load_rows():
     query = """
-        SELECT Company_name, Website, Sector, Country, Sources, No_of_employees
+        SELECT S_No, Company_name, Website, Sector, Country, Sources, No_of_employees
         FROM Company_database
         ORDER BY Company_name;
     """
@@ -80,7 +80,7 @@ def build_dataset(rows):
     countries = set()
     sources = set()
 
-    for name, website, sector, country, srcs, employees in rows:
+    for s_no, name, website, sector, country, srcs, employees in rows:
         short = [SOURCE_SHORT.get(s, s) for s in (srcs or [])]
         sources.update(short)
         if country:
@@ -90,7 +90,7 @@ def build_dataset(rows):
             if tag:
                 sector_counts[tag] = sector_counts.get(tag, 0) + 1
         packed.append({
-            "n": name, "w": website, "s": sector,
+            "i": s_no, "n": name, "w": website, "s": sector,
             "c": country, "src": short, "e": employees,
         })
 
@@ -101,6 +101,16 @@ def build_dataset(rows):
         "sectors": top_sectors,
         "sources": sorted(sources),
     }
+
+
+def build_index(rows):
+    """The id -> name/website map the enrichment function validates against.
+
+    Bundled with the Netlify function, never served to browsers. It is what makes
+    the endpoint's input bounded: only ids in here can ever trigger a paid
+    lookup, and the function needs the name and site to search with anyway.
+    """
+    return {str(s_no): {"n": name, "w": website} for s_no, name, website, *_ in rows}
 
 
 def read_template(name):
@@ -114,6 +124,8 @@ def main():
     parser.add_argument("--brand", default="Company Data Collector", help="name shown above the title")
     parser.add_argument("--headline", default="Sourced company directory", help="page headline")
     parser.add_argument("--output", default=os.path.join(ROOT, "site", "index.html"), help="file to write")
+    parser.add_argument("--index", default=os.path.join(ROOT, "data", "companies.json"),
+                        help="id lookup map for the enrichment function")
     args = parser.parse_args()
 
     try:
@@ -166,6 +178,11 @@ def main():
 
     size_kb = os.path.getsize(args.output) / 1024
     logger.info(f"Wrote {args.output} - {total:,} companies, {size_kb:.0f} KB, no external requests.")
+
+    os.makedirs(os.path.dirname(os.path.abspath(args.index)), exist_ok=True)
+    with open(args.index, "w", encoding="utf-8") as handle:
+        json.dump(build_index(rows), handle, ensure_ascii=False, separators=(",", ":"))
+    logger.info(f"Wrote {args.index} - {total:,} ids for the enrichment function.")
     return 0
 
 

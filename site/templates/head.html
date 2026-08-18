@@ -59,6 +59,38 @@
   .tag { display:inline-block; font-family:var(--mono); font-size:0.66rem; letter-spacing:0.03em;
     padding:0.1rem 0.38rem; border-radius:2px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; margin:0 0.2rem 0.2rem 0; }
   .empty { padding:3rem 1rem; text-align:center; color:var(--ink-3); font-size:0.9rem; }
+
+  tbody tr { cursor:pointer; }
+  tbody tr:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
+
+  dialog {
+    padding:0; border:1px solid var(--rule); border-radius:4px; background:var(--raised); color:var(--ink);
+    width:min(38rem, calc(100vw - 2rem)); max-height:min(44rem, calc(100vh - 4rem));
+  }
+  dialog::backdrop { background:rgb(0 0 0 / 45%); }
+  .detail-head { display:flex; gap:1rem; align-items:flex-start; padding:1.1rem 1.25rem 0.9rem;
+    border-bottom:1px solid var(--rule); position:sticky; top:0; background:var(--raised); }
+  .detail-head h2 { margin:0; font-size:1.1rem; font-weight:600; letter-spacing:-0.01em; }
+  .detail-sub { font-size:0.8rem; color:var(--ink-2); margin-top:0.2rem; }
+  .detail-close { margin-left:auto; font:inherit; font-size:1.2rem; line-height:1; color:var(--ink-3);
+    background:none; border:1px solid transparent; border-radius:3px; padding:0.15rem 0.45rem; cursor:pointer; }
+  .detail-close:hover { background:var(--sunk); color:var(--ink); }
+  .detail-body { padding:1rem 1.25rem 1.25rem; }
+  .facts { display:grid; grid-template-columns:auto 1fr; gap:0.5rem 1rem; margin:0; font-size:0.87rem; }
+  .facts dt { font-family:var(--mono); font-size:0.68rem; text-transform:uppercase; letter-spacing:0.07em;
+    color:var(--ink-3); padding-top:0.15rem; white-space:nowrap; }
+  .facts dd { margin:0; }
+  .facts .asof { color:var(--ink-3); font-size:0.78rem; }
+  .blurb { margin:0 0 1rem; font-size:0.89rem; color:var(--ink-2); }
+  .detail-note { font-size:0.82rem; color:var(--ink-3); display:flex; align-items:center; gap:0.5rem; }
+  .detail-note.warn { color:var(--ink-2); }
+  .srcs { margin:1rem 0 0; padding-top:0.75rem; border-top:1px solid var(--rule);
+    font-size:0.8rem; color:var(--ink-3); display:flex; flex-wrap:wrap; gap:0.3rem 0.7rem; }
+  .spinner { width:0.75rem; height:0.75rem; border:2px solid var(--rule); border-top-color:var(--accent);
+    border-radius:50%; display:inline-block; animation:spin 0.7s linear infinite; flex:none; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce) { .spinner { animation:none; } }
+  .stamp { font-family:var(--mono); font-size:0.7rem; color:var(--ink-3); margin-top:0.9rem; }
   .pager { display:flex; gap:0.5rem; align-items:center; justify-content:center; padding-top:0.3rem; }
   .pager button { font:inherit; font-size:0.84rem; padding:0.35rem 0.75rem; border:1px solid var(--rule);
     background:var(--raised); color:var(--ink); border-radius:3px; cursor:pointer; }
@@ -106,4 +138,15 @@
 
   <footer>{{FOOTER}}</footer>
 </div>
+
+<dialog id="detail" aria-labelledby="d-name">
+  <div class="detail-head">
+    <div>
+      <h2 id="d-name"></h2>
+      <div class="detail-sub" id="d-sub"></div>
+    </div>
+    <button class="detail-close" id="d-close" type="button" aria-label="Close">&times;</button>
+  </div>
+  <div class="detail-body" id="d-body" aria-live="polite"></div>
+</dialog>
 

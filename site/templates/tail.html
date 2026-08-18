@@ -67,7 +67,7 @@
         ? '<a href="' + esc(r.w) + '" target="_blank" rel="noopener noreferrer">' + esc(r.n) + "</a>"
         : esc(r.n);
       const tags = (r.src || []).map(s => '<span class="tag">' + esc(s) + "</span>").join("");
-      return "<tr>" +
+      return '<tr data-i="' + esc(r.i) + '" tabindex="0">' +
         '<td class="name">' + name + "</td>" +
         '<td class="sector">' + esc(r.s || "\u2014") + "</td>" +
         '<td class="country">' + esc(r.c || "\u2014") + "</td>" +
@@ -105,6 +105,135 @@
   });
   $("prev").addEventListener("click", () => { if (page > 0) { page--; render(); window.scrollTo({ top: 0, behavior: "smooth" }); } });
   $("next").addEventListener("click", () => { page++; render(); window.scrollTo({ top: 0, behavior: "smooth" }); });
+
+  // --- Detail panel -------------------------------------------------------
+  // The table ships with name, sector, country and source for every company.
+  // Headcount and the rest are looked up on first open and cached server-side,
+  // so the panel paints what we already know immediately and fills in the rest.
+
+  const dlg = $("detail"), dName = $("d-name"), dSub = $("d-sub"), dBody = $("d-body");
+  const byId = new Map(rows.map(r => [String(r.i), r]));
+  let inflight = null;
+
+  const host = url => String(url || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const fact = (label, value) =>
+    value == null || value === "" ? "" : "<dt>" + esc(label) + "</dt><dd>" + value + "</dd>";
+  const note = (text, cls) =>
+    '<p class="detail-note ' + (cls || "") + '">' + text + "</p>";
+  const spinner = '<span class="spinner" aria-hidden="true"></span>';
+
+  function knownFacts(r) {
+    return fact("Sector", esc(r.s || "—")) +
+      fact("Country", esc(r.c || "—")) +
+      fact("Source", (r.src || []).map(s => '<span class="tag">' + esc(s) + "</span>").join("") || "—");
+  }
+
+  function renderLoading(r) {
+    dBody.innerHTML = '<dl class="facts">' + knownFacts(r) + "</dl>" +
+      note(spinner + "Looking this company up… first time takes up to 30 seconds.");
+  }
+
+  function renderEnriched(r, rec) {
+    if (rec.not_found) {
+      dBody.innerHTML = '<dl class="facts">' + knownFacts(r) + "</dl>" +
+        note(esc(rec.description || "No web presence found — the company may be defunct or acquired."), "warn") +
+        '<p class="stamp">Checked ' + esc(String(rec.enriched_at).slice(0, 10)) + "</p>";
+      return;
+    }
+
+    const employees = rec.employees == null
+      ? null
+      : Number(rec.employees).toLocaleString() +
+        (rec.employees_asof ? ' <span class="asof">(' + esc(rec.employees_asof) + ")</span>" : "");
+
+    const srcs = (rec.sources || []).length
+      ? '<div class="srcs">' + rec.sources.map(s =>
+          '<a href="' + esc(s.url) + '" target="_blank" rel="noopener noreferrer">' + esc(s.label || host(s.url)) + "</a>"
+        ).join("") + "</div>"
+      : "";
+
+    const facts = knownFacts(r) +
+      fact("Team", employees) +
+      fact("Founded", rec.founded_year == null ? null : esc(rec.founded_year)) +
+      fact("Stage", esc(rec.funding_stage || "")) +
+      fact("Confidence", esc(rec.confidence || ""));
+
+    dBody.innerHTML =
+      (rec.description ? '<p class="blurb">' + esc(rec.description) + "</p>" : "") +
+      '<dl class="facts">' + facts + "</dl>" + srcs +
+      '<p class="stamp">Researched ' + esc(String(rec.enriched_at).slice(0, 10)) + "</p>";
+  }
+
+  const UNAVAILABLE = {
+    rate_limited: "You're opening companies faster than the lookup budget allows. Try again in a minute.",
+    daily_cap: "Today's research budget is spent. Companies already looked up still open instantly.",
+    lookup_failed: "That lookup didn't complete. Try again shortly."
+  };
+
+  function renderUnavailable(r, reason) {
+    dBody.innerHTML = '<dl class="facts">' + knownFacts(r) + "</dl>" +
+      note(esc(UNAVAILABLE[reason] || "Extra detail isn't available right now."), "warn");
+  }
+
+  async function openDetail(id) {
+    const r = byId.get(String(id));
+    if (!r) return;
+
+    if (inflight) inflight.abort();
+    const ctrl = new AbortController();
+    inflight = ctrl;
+
+    dName.textContent = r.n;
+    dSub.innerHTML = [
+      r.c ? esc(r.c) : "",
+      r.w ? '<a href="' + esc(r.w) + '" target="_blank" rel="noopener noreferrer">' + esc(host(r.w)) + "</a>" : ""
+    ].filter(Boolean).join(" &middot; ");
+    renderLoading(r);
+    if (!dlg.open) dlg.showModal();
+
+    let payload;
+    try {
+      const res = await fetch("/api/company/" + encodeURIComponent(r.i), { signal: ctrl.signal });
+      payload = await res.json();
+    } catch (err) {
+      if (ctrl.signal.aborted) return; // a newer row was opened; leave its render alone
+      dBody.innerHTML = '<dl class="facts">' + knownFacts(r) + "</dl>" +
+        note("Couldn't reach the lookup service.", "warn");
+      return;
+    }
+    if (ctrl.signal.aborted) return;
+
+    if (payload.data && payload.status !== "unavailable") {
+      renderEnriched(r, payload.data);
+      // Fold the headcount back into the table so the row stops showing a dash.
+      if (payload.data.employees != null && r.e !== payload.data.employees) {
+        r.e = payload.data.employees;
+        render();
+      }
+    } else if (payload.data) {
+      renderEnriched(r, payload.data); // stale copy beats nothing
+    } else {
+      renderUnavailable(r, payload.reason);
+    }
+  }
+
+  body.addEventListener("click", e => {
+    if (e.target.closest("a")) return; // let the website link win
+    const tr = e.target.closest("tr[data-i]");
+    if (tr) openDetail(tr.dataset.i);
+  });
+  body.addEventListener("keydown", e => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const tr = e.target.closest("tr[data-i]");
+    if (!tr) return;
+    e.preventDefault();
+    openDetail(tr.dataset.i);
+  });
+
+  $("d-close").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("close", () => { if (inflight) inflight.abort(); });
+  // Clicking the backdrop closes; clicks inside the panel land on a child.
+  dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });
 
   applyFilters();
 })();

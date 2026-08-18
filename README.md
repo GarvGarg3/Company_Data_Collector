@@ -1,6 +1,8 @@
 # Company Data Collector
 
-A dynamic, scalable ETL pipeline utilizing Apache Airflow and PostgreSQL to orchestrate and store sanitized data from multiple API endpoints and web scrapers.
+A dynamic, scalable ETL pipeline utilizing Apache Airflow and PostgreSQL to orchestrate and store sanitized data from multiple API endpoints and web scrapers, published as a searchable directory with on-demand company research.
+
+> Using the published directory rather than working on the pipeline? See **[docs/USING.md](docs/USING.md)**.
 
 ## Project Structure
 
@@ -16,6 +18,13 @@ A dynamic, scalable ETL pipeline utilizing Apache Airflow and PostgreSQL to orch
   - `company_filter.py`: Shared relevance rules that drop shell entities and non-venture businesses at ingestion time.
   - `prune_companies.py`: Applies the same rules to rows already stored, reporting by default.
   - `normalize_countries.py`: Backfills stored country spellings through the same normalizer used at ingestion.
+  - `build_site.py`: Bakes the whole table into one self-contained HTML page, plus the id index the enrichment endpoint validates against.
+- `site/`: The published directory page. `templates/head.html` and `templates/tail.html` are the source; `index.html` is generated and gitignored.
+- `web/`: FastAPI app serving the same directory live from Postgres, for when a snapshot isn't fresh enough.
+- `netlify/`: The on-demand enrichment endpoint (see [On-demand enrichment](#on-demand-enrichment)).
+  - `functions/company.mts`: `GET /api/company/:id` — cache, spend guards, HTTP surface.
+  - `lib/`: The provider seam — shared schema and prompt, plus one module per backend.
+- `netlify.toml`: Publish directory, functions config, and the files bundled with them.
 
 ## Key Features
 
@@ -91,6 +100,112 @@ WHERE Sector ILIKE '%fintech%'
   AND Active
   AND Updated_at > NOW() - INTERVAL '30 days';
 ```
+
+## Publishing the directory
+
+There are two front-ends over the same table. They answer different questions, and neither replaces the other.
+
+| | `scripts/build_site.py` | `web/app.py` |
+|---|---|---|
+| What it is | One self-contained HTML file, data embedded | FastAPI app querying Postgres per request |
+| Freshness | A snapshot, frozen at build time | Live — a scraper run shows up on refresh |
+| Needs | Nothing. Open the file, email it, drop it on any static host | An always-on process and a reachable database |
+| Hosted at | Netlify | Not deployed |
+
+Build the snapshot:
+
+```bash
+python3 scripts/build_site.py                       # site/index.html + data/companies.json
+python3 scripts/build_site.py --brand "Acme Ventures" --output /tmp/acme.html
+```
+
+Both outputs are gitignored, so **the machine that builds is the machine that deploys**. `data/companies.json` is the id → name/website map bundled with the enrichment function; it is never served to browsers.
+
+Run the live view instead:
+
+```bash
+docker compose up -d postgres web    # http://localhost:8000
+```
+
+## On-demand enrichment
+
+The published page ships name, sector, country, and source for every company. Headcount, founding year, funding stage, and a description are looked up **the first time somebody opens a row**, then cached. Enriching all ~23k companies up front would cost hundreds of dollars for data nobody reads; enriching the few hundred anyone actually clicks costs a fraction of that, and every later view is free and instant.
+
+```
+click row → GET /api/company/:id
+              ├─ cache hit  → JSON immediately (~200ms, no spend)
+              └─ cache miss → search + extract → cache → JSON (~10-15s)
+```
+
+Records are stored in Netlify Blobs and re-looked-up after `ENRICH_TTL_DAYS` (headcounts age badly). Negative results are cached too — dead startups are exactly what people click out of curiosity, and re-paying for "still gone" is the easiest way to burn the daily budget on nothing.
+
+### Guards
+
+The endpoint is public and spends money per cache miss. Four things bound the worst case; read `netlify/functions/company.mts` before loosening any of them.
+
+1. **Bounded input.** Only integer ids present in `data/companies.json` are accepted — no free-text queries, so the set of possible paid lookups is finite and known.
+2. **Daily ceiling** (`ENRICH_DAILY_MISS_CAP`). The real backstop. Past it, cached rows still serve and misses return `unavailable`.
+3. **Per-IP throttle** (`ENRICH_IP_PER_MIN`). Cache hits are unmetered.
+4. **Default function concurrency**, so a burst can't fan out into hundreds of parallel model calls.
+
+Counting is approximate rather than exact: `claimSlot()` prefers a compare-and-swap, but falls back to a plain write when the store refuses the conditional (see the note in that function). Drift is bounded by concurrency.
+
+### Providers
+
+`netlify/lib/` holds a provider seam so the backend is a config change, not a rewrite. Both share one JSON schema and one set of field rules, so switching backends can't silently change what lands in the cache.
+
+| | Anthropic | Groq |
+|---|---|---|
+| Calls | One — `web_search` and schema-validated output in the same request | Two — `compound-mini` searches, `gpt-oss-120b` extracts under strict decoding |
+| Why | Server-side search means no separate retrieval step | Compound can't do structured output; the strict models can't search |
+| Cost | Paid | Free tier (expect occasional 429s and retries) |
+
+Selection is `ENRICH_PROVIDER`. Leave it unset and whichever key is present wins, Anthropic first — but pin it explicitly, because SDKs resolve credentials from more places than the environment variable.
+
+### Configuration
+
+Only one variable is required. Everything else has a working default.
+
+| Variable | Default | |
+|---|---|---|
+| `GROQ_API_KEY` / `ANTHROPIC_API_KEY` | — | **One is required** |
+| `ENRICH_PROVIDER` | key presence | `groq` or `anthropic` — pin it |
+| `ENRICH_DAILY_MISS_CAP` | `200` | Paid lookups per day |
+| `ENRICH_IP_PER_MIN` | `5` | Misses per IP per minute |
+| `ENRICH_TTL_DAYS` | `90` | Before a cached record is refreshed |
+| `ENRICH_MODEL` | `claude-opus-5` | Anthropic only |
+| `ENRICH_MAX_SEARCHES` | `4` | Anthropic only |
+| `GROQ_SEARCH_MODEL` | `groq/compound-mini` | |
+| `GROQ_EXTRACT_MODEL` | `openai/gpt-oss-120b` | Must support strict structured outputs |
+
+None of the `PG_*`, `AIRFLOW_*`, or scraper keys go to Netlify — it runs the endpoint and nothing else.
+
+### Running and deploying it
+
+```bash
+npm install
+netlify env:set GROQ_API_KEY gsk_...     # production; `.env` covers local only
+netlify dev                              # site + function on :8888
+netlify deploy --prod
+```
+
+Two behaviours worth knowing before you change the code:
+
+- **Never return 404 from the function.** Netlify reads it as "this handler declined" and re-dispatches to the static handler, which re-enters the same route as `<id>.html` and answers with a misleading `bad id`. Unknown ids return 400 on purpose.
+- **A `pause_turn` must be resumed.** A search loop that hits its iteration cap otherwise returns a truncated answer with no error, and that gets cached as fact.
+
+## Local development notes
+
+The pipeline normally runs inside Docker, where compose injects the environment. Running the Python scripts **from the host** needs three fixes that aren't obvious:
+
+```bash
+python3 -m venv .venv                    # `python` does not exist on macOS; use python3
+.venv/bin/pip install -r requirements.txt
+```
+
+- `PG_HOST` in `.env` is `postgres`, the compose service name. From the host it must be `localhost`.
+- **Nothing loads `.env` into Python.** `db_helper` falls back to its default password and connects to the wrong place, or fails with a confusing auth error. Export the variables, or run the script inside the container.
+- `set -a; source .env` currently fails in zsh: some lines are written `KEY = value` with spaces around `=`.
 
 ## Setup & Running
 
