@@ -18,6 +18,7 @@ A dynamic, scalable ETL pipeline utilizing Apache Airflow and PostgreSQL to orch
   - `company_filter.py`: Shared relevance rules that drop shell entities and non-venture businesses at ingestion time.
   - `prune_companies.py`: Applies the same rules to rows already stored, reporting by default.
   - `normalize_countries.py`: Backfills stored country spellings through the same normalizer used at ingestion.
+  - `run.sh`: Runs any of these scripts from the host with the venv, PYTHONPATH, `.env` values and host-reachable `PG_HOST` they expect.
   - `build_site.py`: Bakes the whole table into one self-contained HTML page, plus the id index the enrichment endpoint validates against.
 - `site/`: The published directory page. `templates/head.html` and `templates/tail.html` are the source; `index.html` is generated and gitignored.
 - `web/`: FastAPI app serving the same directory live from Postgres, for when a snapshot isn't fresh enough.
@@ -42,8 +43,8 @@ A dynamic, scalable ETL pipeline utilizing Apache Airflow and PostgreSQL to orch
 
 Rows written before this existed are fixed with the same function:
 ```bash
-python scripts/normalize_countries.py           # print the UPDATE statements, change nothing
-python scripts/normalize_countries.py --apply   # execute them
+scripts/run.sh normalize_countries.py           # print the UPDATE statements, change nothing
+scripts/run.sh normalize_countries.py --apply   # execute them
 ```
 
 **Sector is not yet normalized.** `FinTech` and `Fintech` remain distinct values, as do `AI/Machine Learning` and `Artificial intelligence and machine learning` — each source ships its own taxonomy, so collapsing them needs a mapping table rather than a case fix. Use `ILIKE` when querying by sector until that exists.
@@ -64,9 +65,9 @@ Every run logs the count and reason for what was removed. Set `COMPANY_FILTER_DI
 
 To clean rows collected before the filter existed:
 ```bash
-python scripts/prune_companies.py                      # report only (default)
-python scripts/prune_companies.py --action deactivate  # set Active = FALSE
-python scripts/prune_companies.py --action delete      # remove the rows
+scripts/run.sh prune_companies.py                      # report only (default)
+scripts/run.sh prune_companies.py --action deactivate  # set Active = FALSE
+scripts/run.sh prune_companies.py --action delete      # remove the rows
 ```
 
 ### Per-source filters
@@ -82,8 +83,8 @@ python scripts/prune_companies.py --action delete      # remove the rows
 
 Repeatable options accept multiple values:
 ```bash
-python scripts/scrapping/techstars.py --year-min 2022 --region Europe --limit 300
-python scripts/scrapping/startup_india.py --state Karnataka --industry "IT Services" --stage Scaling --limit 500
+scripts/run.sh scrapping/techstars.py --year-min 2022 --region Europe --limit 300
+scripts/run.sh scrapping/startup_india.py --state Karnataka --industry "IT Services" --stage Scaling --limit 500
 ```
 
 ### Querying the collected data
@@ -115,8 +116,8 @@ There are two front-ends over the same table. They answer different questions, a
 Build the snapshot:
 
 ```bash
-python3 scripts/build_site.py                       # site/index.html + data/companies.json
-python3 scripts/build_site.py --brand "Acme Ventures" --output /tmp/acme.html
+scripts/run.sh build_site.py                        # site/index.html + data/companies.json
+scripts/run.sh build_site.py --brand "Acme Ventures" --output /tmp/acme.html
 ```
 
 Both outputs are gitignored, so **the machine that builds is the machine that deploys**. `data/companies.json` is the id → name/website map bundled with the enrichment function; it is never served to browsers.
@@ -196,16 +197,22 @@ Two behaviours worth knowing before you change the code:
 
 ## Local development notes
 
-The pipeline normally runs inside Docker, where compose injects the environment. Running the Python scripts **from the host** needs three fixes that aren't obvious:
+The pipeline normally runs inside Docker, where compose injects the environment and installs the requirements. Running the Python scripts **from the host** is missing four things, so use the wrapper rather than calling `python3` directly:
 
 ```bash
-python3 -m venv .venv                    # `python` does not exist on macOS; use python3
-.venv/bin/pip install -r requirements.txt
+scripts/run.sh build_site.py
+scripts/run.sh normalize_countries.py --apply
+scripts/run.sh scrapping/techstars.py --limit 50
 ```
 
-- `PG_HOST` in `.env` is `postgres`, the compose service name. From the host it must be `localhost`.
-- **Nothing loads `.env` into Python.** `db_helper` falls back to its default password and connects to the wrong place, or fails with a confusing auth error. Export the variables, or run the script inside the container.
-- `set -a; source .env` currently fails in zsh: some lines are written `KEY = value` with spaces around `=`.
+It creates `.venv` and installs requirements on first run, then supplies what a bare `python3 scripts/...` lacks:
+
+- **A virtualenv.** `python` doesn't exist on macOS, and system `python3` has no `psycopg2`.
+- **`PYTHONPATH`**, so `from scripts import db_helper` resolves.
+- **The values in `.env`** — nothing loads them into Python, so `db_helper` silently falls back to its default password and fails with a confusing auth error. (`set -a; source .env` doesn't work either: some lines are written `KEY = value`, which the shell can't parse. The wrapper reads the file itself.)
+- **`PG_HOST=localhost`.** `.env` says `postgres`, the compose service name, which only resolves inside the compose network.
+
+Variables you export yourself still win, so `PG_HOST=10.0.0.5 scripts/run.sh build_site.py` works.
 
 ## Setup & Running
 
